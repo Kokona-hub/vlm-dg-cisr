@@ -1,0 +1,104 @@
+# Replace the dataset paths, then run this before a formal experiment.
+seed: 42
+use_evidence: true
+
+dataset:
+  # DomainBed layout: root/domain/class/image.
+  type: folder
+  root: /big-disk/hzh/LFME/LFME-main/domain_generalization/domainbed/data/domain_net
+  # Domain indices: 0=clipart, 1=infograph, 2=painting, 3=quickdraw, 4=real, 5=sketch.
+  # This smoke experiment uses domains 0,1,2 as sources and domain 4 as the target.
+  source_domains: [clipart, infograph, painting]
+  target_domains: [real]
+  evidence_bank: configs/evidence_bank_domainnet.json
+  max_classes: 4
+  max_per_domain_class: 2
+
+fourier:
+  materialize: false
+  views_per_sample: 1
+  low_frequency_ratio: 0.08
+  interpolation_range: [0.3, 1.0]
+  extrapolation_range: [1.0, 1.2]
+  extrapolation_probability: 0.5
+  overwrite: false
+
+output:
+  manifest_dir: runs/smoke_3src012_to_4/manifests
+  styled_image_dir: runs/smoke_3src012_to_4/fourier_images
+
+data:
+  source_manifest: runs/smoke_3src012_to_4/manifests/source_train.jsonl
+  pair_manifest: runs/smoke_3src012_to_4/manifests/fourier_pairs.jsonl
+
+model:
+  backend: huggingface
+  name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+  min_pixels: 100352
+  max_pixels: 401408
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ".*(?:visual\\.blocks\\.[0-9]+\\.attn\\.(?:qkv|proj)|(?:q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+
+sft:
+  output_dir: runs/smoke_3src012_to_4/sft_adapter
+  max_steps: 2
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0002
+  max_length: 2048
+  gradient_checkpointing: true
+  logging_steps: 1
+  save_steps: 2
+  report_to: [tensorboard]
+
+grpo:
+  sft_adapter_path: runs/smoke_3src012_to_4/sft_adapter
+  output_dir: runs/smoke_3src012_to_4/grpo_adapter
+  max_steps: 2
+  per_device_train_batch_size: 1
+  # One GPU x batch 1 x accumulation 2 must be divisible by num_generations=2.
+  gradient_accumulation_steps: 2
+  learning_rate: 0.000001
+  gradient_checkpointing: true
+  num_generations: 2
+  max_completion_length: 128
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  loss_type: dapo
+  use_vllm: false
+  reward_functions: [paired_correctness, all_views_correct, format, evidence_quality]
+  reward_weights: [1.0, 1.0, 0.1, 0.2]
+  logging_steps: 1
+  save_steps: 2
+  report_to: [tensorboard]
+  log_completions: true
+  num_completions_to_print: 2
+
+evaluation:
+  split: test
+  adapter_path: runs/smoke_3src012_to_4/grpo_adapter
+  output_dir: runs/smoke_3src012_to_4/evaluation_real
+  max_new_tokens: 96
+  max_samples: 8
+
+ollama:
+  model: qwen3-vl:8b
+  base_url: http://127.0.0.1:11434
+  timeout: 300
+  max_retries: 2
+  retry_backoff: 5
+  max_consecutive_failures: 3
+  checkpoint_every: 1
+  resume: true

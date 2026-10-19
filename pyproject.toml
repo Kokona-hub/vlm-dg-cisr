@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fs-pairgrpo"
+version = "0.1.0"
+description = "Few-source domain generalization for vision-language models with Fourier style extrapolation and paired GRPO."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy>=1.26,<3",
+  "Pillow>=10.2",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+  "requests>=2.32",
+  "filelock>=3.13",
+]
+
+[project.optional-dependencies]
+train = [
+  "accelerate>=1.4,<2",
+  "bitsandbytes>=0.45",
+  "datasets>=3.2,<5",
+  "peft>=0.14,<1",
+  "qwen-vl-utils>=0.0.14",
+  "safetensors>=0.4",
+  "transformers>=4.56.2,<5",
+  "trl[peft,quantization,vlm]==0.29.1",
+  "wandb>=0.19",
+]
+dev = [
+  "pytest>=8.3",
+  "ruff>=0.9",
+]
+
+[project.scripts]
+fs-pairgrpo = "fs_pairgrpo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

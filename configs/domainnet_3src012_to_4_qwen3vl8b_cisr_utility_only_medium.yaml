@@ -1,0 +1,98 @@
+seed: 42
+use_evidence: false
+
+dataset:
+  type: folder
+  root: /big-disk/hzh/LFME/LFME-main/domain_generalization/domainbed/data/domain_net
+  source_domains: [clipart, infograph, painting]
+  target_domains: [real]
+  evidence_bank: configs/evidence_bank_domainnet.json
+  max_classes: 50
+  max_per_domain_class: 20
+  selection_seed: 42
+
+fourier:
+  materialize: false
+  views_per_sample: 1
+  low_frequency_ratio: 0.08
+  interpolation_range: [0.3, 1.0]
+  extrapolation_range: [1.0, 1.2]
+  extrapolation_probability: 0.5
+  overwrite: false
+
+output:
+  manifest_dir: runs/domainnet_3src012_to_4_medium/manifests
+  styled_image_dir: runs/domainnet_3src012_to_4_medium/fourier_images
+
+data:
+  source_manifest: runs/domainnet_3src012_to_4_medium/manifests/source_train.jsonl
+  pair_manifest: runs/domainnet_3src012_to_4_medium/manifests/fourier_pairs.jsonl
+
+model:
+  backend: huggingface
+  name_or_path: /big-disk/hzh/models/Qwen3-VL-8B-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+  min_pixels: 100352
+  max_pixels: 401408
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ".*(?:visual\\.blocks\\.[0-9]+\\.attn\\.(?:qkv|proj)|(?:q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+
+sft:
+  output_dir: runs/domainnet_3src012_to_4_medium/sft_adapter
+  include_fourier: false
+  max_steps: 200
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  max_length: 2048
+  gradient_checkpointing: true
+  logging_steps: 10
+  save_steps: 100
+  save_total_limit: 2
+  report_to: [tensorboard]
+
+crlora_grpo:
+  sft_adapter_path: runs/domainnet_3src012_to_4_medium/sft_adapter
+  output_dir: runs/domainnet_3src012_to_4_medium/cisr_utility_only
+  shared_adapter_name: shared
+  reference_adapter_name: reference
+  domain_adapter_prefix: domain_
+  routing_mode: utility_only
+  pseudo_target_rotation: true
+  transfer_utility_gating: false
+  transfer_utility_temperature: 0.25
+  transfer_utility_threshold: 0.0
+  pseudo_target_update_weight: 0.0
+  orthogonal_residual: true
+  domain_residual_weight: 1.0
+  skip_update_without_signal: true
+  max_steps: 100
+  gradient_accumulation_steps: 1
+  per_domain_batch_size: 1
+  learning_rate: 0.000001
+  num_generations: 2
+  max_completion_length: 16
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  max_grad_norm: 1.0
+  logging_steps: 1
+
+evaluation:
+  split: test
+  adapter_path: runs/domainnet_3src012_to_4_medium/cisr_utility_only/adapters/shared/shared
+  output_dir: runs/domainnet_3src012_to_4_medium/eval_cisr_utility_only
+  max_new_tokens: 64
+  max_samples: null

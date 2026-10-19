@@ -1,0 +1,160 @@
+seed: 42
+use_evidence: false
+
+# Stage-2 RL-stage diagnostic rerun.
+#
+# The previous medium run produced ~90% signal-free domain-steps and 82%
+# reward-saturated ones, so it could not test the method. This variant changes
+# ONLY the RL stage and reuses the existing manifests and Label-SFT adapter
+# (same 50-class label space), so `prepare` and `sft` are skipped and the rerun
+# starts at CRLoRA-GRPO.
+#
+# IMPORTANT: do NOT export CRLORA_LOW_MEMORY or CRLORA_ULTRA_LOW_MEMORY for this
+# config. Those flags silently cap num_generations to 2, max_completion_length
+# to <=32, and max_pixels to <=100352, and the low max_pixels makes the RL stage
+# train at a different image resolution than SFT and than the final evaluation.
+# If the run goes OOM, lower num_generations or max_pixels *explicitly here* so
+# the change stays visible and reproducible.
+dataset:
+  type: folder
+  root: /big-disk/hzh/LFME/LFME-main/domain_generalization/domainbed/data/domain_net
+  source_domains: [clipart, infograph, painting]
+  target_domains: [real]
+  evidence_bank: configs/evidence_bank_domainnet.json
+  max_classes: 50
+  max_per_domain_class: 20
+  selection_seed: 42
+
+fourier:
+  materialize: false
+  views_per_sample: 1
+  low_frequency_ratio: 0.08
+  interpolation_range: [0.3, 1.0]
+  extrapolation_range: [1.0, 1.2]
+  extrapolation_probability: 0.5
+  overwrite: false
+
+# Reuse the already prepared 50-class manifests.
+output:
+  manifest_dir: runs/domainnet_3src012_to_4_medium/manifests
+  styled_image_dir: runs/domainnet_3src012_to_4_medium/fourier_images
+
+data:
+  source_manifest: runs/domainnet_3src012_to_4_medium/manifests/source_train.jsonl
+  pair_manifest: runs/domainnet_3src012_to_4_medium/manifests/fourier_pairs.jsonl
+
+model:
+  backend: huggingface
+  name_or_path: /big-disk/hzh/models/Qwen3-VL-8B-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+  min_pixels: 100352
+  max_pixels: 401408
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ".*(?:visual\\.blocks\\.[0-9]+\\.attn\\.(?:qkv|proj)|(?:q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+
+# Points at the completed adapter so the end-to-end script skips SFT.
+sft:
+  output_dir: runs/domainnet_3src012_to_4_medium/sft_adapter
+  include_fourier: false
+  max_steps: 200
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  max_length: 2048
+  gradient_checkpointing: true
+  logging_steps: 10
+  save_steps: 100
+  save_total_limit: 2
+  report_to: [tensorboard]
+
+grpo:
+  mode: independent_pair
+  sft_adapter_path: runs/domainnet_3src012_to_4_medium/sft_adapter
+  output_dir: runs/domainnet_3src012_to_4_medium/pairgrpo_adapter
+  max_steps: 100
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.000001
+  num_generations: 4
+  max_completion_length: 96
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  logging_steps: 10
+
+crlora_grpo:
+  sft_adapter_path: runs/domainnet_3src012_to_4_medium/sft_adapter
+  output_dir: runs/domainnet_3src012_to_4_medium/crlora_grpo_rl2
+  shared_adapter_name: shared
+  reference_adapter_name: reference
+  mixed_precision: "no"
+  domain_adapter_prefix: domain_
+  pseudo_target_rotation: true
+  transfer_utility_gating: true
+  transfer_utility_temperature: 0.25
+  transfer_utility_threshold: 0.0
+  transfer_utility_step_size: 0.05
+  # Was 0.0. With 3 sources the pseudo domain is rotated out of the update and
+  # its gradient was never even computed, discarding roughly one third of the
+  # already-sparse informative samples. 1.0 matches the FS-CRLoRA ablation, so
+  # the gated and ungated runs stay comparable.
+  pseudo_target_update_weight: 1.0
+  pseudo_target_weight: 1.0
+  orthogonal_residual: true
+  domain_residual_weight: 1.0
+  # Was 100. Only 17 of those steps carried any task gradient on Shared LoRA.
+  max_steps: 300
+  gradient_accumulation_steps: 1
+  per_domain_batch_size: 1
+  learning_rate: 0.000001
+  # Kept at 4 so the intended configuration is actually what runs; this is the
+  # value the previous run was believed to use but never did under the
+  # low-memory override.
+  num_generations: 4
+  max_completion_length: 96
+  # Left at the original values on purpose. The reward distribution shows 71%
+  # of domain-steps are already fully correct, so raising temperature would
+  # mostly manufacture new errors for the policy to undo, which consumes the
+  # scarce signal budget without teaching anything.
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  max_grad_norm: 1.0
+  # The measured run had 83 of 100 steps with zero advantage signal anywhere,
+  # where the only remaining gradient is beta * KL. Skipping those steps stops
+  # AdamW from drifting the Shared LoRA on a signal-free gradient. Logged as
+  # "optimizer_updated": false.
+  skip_update_without_signal: true
+  # Explicit warmup; the previous run's learning rate (1.9e-8 at step 28,
+  # still in a ~1465-step warmup) was inconsistent with max_steps: 100.
+  warmup_ratio: 0.05
+  logging_steps: 1
+
+evaluation:
+  split: test
+  adapter_path: runs/domainnet_3src012_to_4_medium/crlora_grpo_rl2/adapters/shared/shared
+  output_dir: runs/domainnet_3src012_to_4_medium/eval_crlora_shared_rl2
+  max_new_tokens: 64
+  max_samples: null
+
+ollama:
+  model: qwen3-vl:8b
+  base_url: http://127.0.0.1:11435
+  timeout: 600
+  max_retries: 3
+  retry_backoff: 10
+  resume: true

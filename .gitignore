@@ -1,0 +1,12 @@
+runs/
+outputs/
+*.log
+*.jsonl
+*.pth
+*.pt
+*.safetensors
+*.bin
+.env
+__pycache__/
+.pytest_cache/
+src/fs_pairgrpo.egg-info/

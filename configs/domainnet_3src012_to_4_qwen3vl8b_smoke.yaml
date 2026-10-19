@@ -1,0 +1,119 @@
+seed: 42
+use_evidence: false
+
+dataset:
+  type: folder
+  root: /big-disk/hzh/LFME/LFME-main/domain_generalization/domainbed/data/domain_net
+  source_domains: [clipart, infograph, painting]
+  target_domains: [real]
+  max_classes: 4
+  max_per_domain_class: 2
+
+fourier:
+  materialize: false
+  views_per_sample: 1
+  low_frequency_ratio: 0.08
+  interpolation_range: [0.3, 1.0]
+  extrapolation_range: [1.0, 1.2]
+  extrapolation_probability: 0.5
+  overwrite: false
+
+output:
+  manifest_dir: runs/qwen3vl8b_smoke/manifests
+  styled_image_dir: runs/qwen3vl8b_smoke/fourier_images
+
+data:
+  source_manifest: runs/qwen3vl8b_smoke/manifests/source_train.jsonl
+  pair_manifest: runs/qwen3vl8b_smoke/manifests/fourier_pairs.jsonl
+
+model:
+  backend: huggingface
+  name_or_path: /big-disk/hzh/models/Qwen3-VL-8B-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+  min_pixels: 100352
+  max_pixels: 401408
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ".*(?:visual\\.blocks\\.[0-9]+\\.attn\\.(?:qkv|proj)|(?:q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+
+sft:
+  output_dir: runs/qwen3vl8b_smoke/label_sft_adapter
+  include_fourier: false
+  max_steps: 2
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.0002
+  max_length: 2048
+  gradient_checkpointing: true
+  logging_steps: 1
+  save_steps: 2
+  save_total_limit: 1
+  report_to: [tensorboard]
+
+grpo:
+  mode: independent_pair
+  sft_adapter_path: runs/qwen3vl8b_smoke/label_sft_adapter
+  output_dir: runs/qwen3vl8b_smoke/independent_pair_grpo_adapter
+  max_steps: 2
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 0.000001
+  num_generations: 2
+  max_completion_length: 64
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  logging_steps: 1
+  report_to: [tensorboard]
+
+# TU-CRLoRA-GRPO: all adapters use the same nominal LoRA rank and target modules.
+# The real target domain (real) is never read by this training stage.
+crlora_grpo:
+  sft_adapter_path: runs/qwen3vl8b_smoke/label_sft_adapter
+  output_dir: runs/qwen3vl8b_smoke/crlora_grpo
+  shared_adapter_name: shared
+  reference_adapter_name: reference
+  mixed_precision: "no"
+  domain_adapter_prefix: domain_
+  pseudo_target_rotation: true
+  transfer_utility_gating: true
+  transfer_utility_temperature: 0.25
+  transfer_utility_threshold: 0.0
+  transfer_utility_step_size: 0.05
+  pseudo_target_update_weight: 0.0
+  pseudo_target_weight: 1.0
+  orthogonal_residual: true
+  domain_residual_weight: 1.0
+  max_steps: 2
+  gradient_accumulation_steps: 1
+  learning_rate: 0.000001
+  per_domain_batch_size: 1
+  num_generations: 2
+  max_completion_length: 64
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  max_grad_norm: 1.0
+  logging_steps: 1
+
+evaluation:
+  split: test
+  # After crlora-grpo, read crlora_grpo/adapter_paths.json and set this to
+  # its shared_adapter_path. Domain adapters must remain disabled at inference.
+  adapter_path: runs/qwen3vl8b_smoke/crlora_grpo/adapters/shared/shared
+  output_dir: runs/qwen3vl8b_smoke/evaluation_real_crlora_shared
+  max_new_tokens: 48
+  max_samples: 8

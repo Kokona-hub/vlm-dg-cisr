@@ -1,0 +1,37 @@
+# FS-PairGRPO server environment
+# The server's NVIDIA 580 driver supports the CUDA-enabled PyTorch wheels published on PyPI.
+# If the official CUDA wheel index is reachable, it may be added manually with --extra-index-url.
+
+# CUDA-enabled PyTorch
+torch>=2.7,<2.9
+torchvision>=0.22,<0.24
+
+# Core data and image processing
+numpy>=1.26,<3
+Pillow>=10.2
+PyYAML>=6.0
+tqdm>=4.66
+cffi>=1.15
+requests>=2.32
+filelock>=3.13
+
+# Qwen-VL, QLoRA, Accelerate and TRL training stack
+accelerate>=1.4,<2
+bitsandbytes>=0.45,<1
+datasets>=3.2,<5
+peft>=0.14,<1
+qwen-vl-utils>=0.0.14
+safetensors>=0.4
+transformers>=4.56.2,<5
+trl[peft,quantization,vlm]==0.29.1
+
+# Logging and experiment tracking
+tensorboard>=2.18
+wandb>=0.19
+
+# Local verification and linting
+pytest>=8.3,<10
+ruff>=0.9,<1
+
+# Optional on RTX 4090. Keep disabled for the first installation because it compiles CUDA code.
+# flash-attn>=2.7.4.post1 --no-build-isolation

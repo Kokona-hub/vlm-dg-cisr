@@ -1,0 +1,136 @@
+seed: 42
+use_evidence: false
+
+# Stage-2 RL-stage rerun of the CISR consensus-only ablation.
+#
+# The first ablation batch (G=2, max_completion_length=16, 100 steps, run under
+# CRLORA_LOW_MEMORY) produced 70/100 signal-free steps, so only ~30 optimizer
+# steps at lr=1e-6 ever ran. Total Shared-LoRA drift was ~1.5e-5, which flips
+# about 1 of the 1000 target images: all three ablations scored 0.951/0.951/
+# 0.952 and are therefore indistinguishable.
+#
+# IMPORTANT: do NOT export CRLORA_LOW_MEMORY / CRLORA_ULTRA_LOW_MEMORY or the
+# CRLORA_NUM_GENERATIONS / CRLORA_MAX_COMPLETION_LENGTH / CRLORA_MIN_PIXELS /
+# CRLORA_MAX_PIXELS overrides for this config. Those flags silently cap
+# num_generations to 2, max_completion_length to <=32 and max_pixels to
+# <=100352, and the reduced max_pixels makes the RL stage train at a different
+# image resolution than SFT and than the final evaluation. If the run goes OOM,
+# lower num_generations or max_pixels *explicitly here* so the change stays
+# visible and reproducible.
+#
+# Kept identical to the previous ablation except for the RL stage, so the three
+# reruns (consensus_only / utility_only / no_orthogonal) stay mutually
+# comparable and comparable with crlora_grpo_rl2.
+dataset:
+  type: folder
+  root: /big-disk/hzh/LFME/LFME-main/domain_generalization/domainbed/data/domain_net
+  source_domains: [clipart, infograph, painting]
+  target_domains: [real]
+  evidence_bank: configs/evidence_bank_domainnet.json
+  max_classes: 50
+  max_per_domain_class: 20
+  selection_seed: 42
+
+fourier:
+  materialize: false
+  views_per_sample: 1
+  low_frequency_ratio: 0.08
+  interpolation_range: [0.3, 1.0]
+  extrapolation_range: [1.0, 1.2]
+  extrapolation_probability: 0.5
+  overwrite: false
+
+# Reuse the already prepared 50-class manifests.
+output:
+  manifest_dir: runs/domainnet_3src012_to_4_medium/manifests
+  styled_image_dir: runs/domainnet_3src012_to_4_medium/fourier_images
+
+data:
+  source_manifest: runs/domainnet_3src012_to_4_medium/manifests/source_train.jsonl
+  pair_manifest: runs/domainnet_3src012_to_4_medium/manifests/fourier_pairs.jsonl
+
+model:
+  backend: huggingface
+  name_or_path: /big-disk/hzh/models/Qwen3-VL-8B-Instruct
+  trust_remote_code: true
+  dtype: bfloat16
+  attn_implementation: sdpa
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  gradient_checkpointing: true
+  # Was 32768 / 50176 through the low-memory env overrides only. Restored to the
+  # SFT and evaluation resolution so the RL stage sees the same images.
+  min_pixels: 100352
+  max_pixels: 401408
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: ".*(?:visual\\.blocks\\.[0-9]+\\.attn\\.(?:qkv|proj)|(?:q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj))$"
+
+# Points at the completed adapter so the end-to-end script skips SFT.
+sft:
+  output_dir: runs/domainnet_3src012_to_4_medium/sft_adapter
+  include_fourier: false
+  max_steps: 200
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.0002
+  max_length: 2048
+  gradient_checkpointing: true
+  logging_steps: 10
+  save_steps: 100
+  save_total_limit: 2
+  report_to: [tensorboard]
+
+crlora_grpo:
+  sft_adapter_path: runs/domainnet_3src012_to_4_medium/sft_adapter
+  output_dir: runs/domainnet_3src012_to_4_medium/cisr_consensus_only_rl2
+  shared_adapter_name: shared
+  reference_adapter_name: reference
+  mixed_precision: "no"
+  domain_adapter_prefix: domain_
+  routing_mode: consensus_only
+  pseudo_target_rotation: true
+  transfer_utility_gating: false
+  transfer_utility_temperature: 0.25
+  transfer_utility_threshold: 0.0
+  # NOTE: in consensus_only the held-out pseudo-target gradient is NOT routed
+  # anywhere (use_utility=False, so the utility scores are only logged), and
+  # pseudo_target_update_weight: 0.0 drops its direct contribution as well.
+  # The pseudo-target branch is therefore compute-only in this ablation by
+  # design. Set to 1.0 if consensus_only should also receive the held-out
+  # gradient, as the FS-CRLoRA baseline does.
+  pseudo_target_update_weight: 0.0
+  orthogonal_residual: true
+  domain_residual_weight: 1.0
+  # Was 100, of which only ~30 carried any task gradient on Shared LoRA.
+  max_steps: 300
+  gradient_accumulation_steps: 1
+  per_domain_batch_size: 1
+  learning_rate: 0.000001
+  # Was 2 under the low-memory override; 2 generations tie so often that
+  # normalized_group_advantages returns all zeros and the step is skipped.
+  num_generations: 4
+  max_completion_length: 96
+  temperature: 0.9
+  top_p: 0.95
+  beta: 0.01
+  epsilon: 0.2
+  format_bonus: 0.05
+  max_grad_norm: 1.0
+  # Kept: with ~70% of steps signal-free the only remaining gradient is beta*KL,
+  # and AdamW would drift Shared LoRA on it. Logged as "optimizer_updated".
+  skip_update_without_signal: true
+  # Explicit warmup; the scheduler was previously left on the 0.03 default.
+  warmup_ratio: 0.05
+  logging_steps: 1
+
+evaluation:
+  split: test
+  adapter_path: runs/domainnet_3src012_to_4_medium/cisr_consensus_only_rl2/adapters/shared/shared
+  output_dir: runs/domainnet_3src012_to_4_medium/eval_cisr_consensus_only_rl2
+  max_new_tokens: 64
+  max_samples: null

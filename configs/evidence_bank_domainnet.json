@@ -1,0 +1,8 @@
+{
+  "aircraft carrier": ["flat flight deck", "large ship hull", "aircraft operations at sea"],
+  "bicycle": ["two wheels", "frame", "handlebars", "pedals"],
+  "elephant": ["long trunk", "large ears", "four thick legs"],
+  "guitar": ["stringed body", "long neck", "frets"],
+  "horse": ["mane", "long face", "four long legs", "hooves"]
+}
+
